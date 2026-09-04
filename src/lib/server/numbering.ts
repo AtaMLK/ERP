@@ -6,6 +6,7 @@ export async function nextNumber(client: PoolClient, sequence: string, prefix: s
     offer_number_seq: 'offer_number_seq',
     invoice_number_seq: 'invoice_number_seq',
     shipment_number_seq: 'shipment_number_seq',
+    inquiry_number_seq: 'inquiry_number_seq',
   };
   const seq = allowed[sequence];
   if (!seq) throw new Error('Invalid numbering sequence');
