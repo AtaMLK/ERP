@@ -1,3 +1,5 @@
+CREATE SEQUENCE IF NOT EXISTS inquiry_number_seq START 1;
+
 CREATE TABLE IF NOT EXISTS customer_inquiries (
   id SERIAL PRIMARY KEY,
   inquiry_number VARCHAR(100) UNIQUE NOT NULL,
