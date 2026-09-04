@@ -23,14 +23,6 @@ async function insert(client, table, data) {
   return r.rows[0];
 }
 
-async function update(client, table, id, data) {
-  const cols = await columns(client, table);
-  const entries = Object.entries(data).filter(([k, v]) => cols.has(k) && v !== undefined);
-  if (!entries.length) return;
-  const set = entries.map(([k], i) => `"${k}"=$${i + 2}`).join(',');
-  await client.query(`UPDATE "${table}" SET ${set} WHERE id=$1`, [id, ...entries.map(([, v]) => v)]);
-}
-
 function money(n) { return Math.round(n * 100) / 100; }
 function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); }
 function daysFromNow(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString(); }
@@ -48,7 +40,7 @@ async function main() {
       const existing = (await client.query(`SELECT id FROM suppliers WHERE name=$1 LIMIT 1`, [name])).rows[0];
       const s = existing || await insert(client, 'suppliers', {
         name, code: `DEMO-SUP-${i}`, email: `supplier${i}@demo.local`, phone: `+90 212 555 10${String(i).padStart(2,'0')}`,
-        currency: i === 2 ? 'TRY' : 'EUR', country: 'Türkiye', status: 'active',
+        currency: i === 2 ? 'TRY' : 'EUR', country: 'Türkiye', status: 'ACTIVE',
       });
       supplierIds.push(s.id);
     }
@@ -58,15 +50,17 @@ async function main() {
       const name = `Demo Customer ${String(i).padStart(2,'0')}`;
       const existing = (await client.query(`SELECT id FROM customers WHERE name=$1 LIMIT 1`, [name])).rows[0];
       const c = existing || await insert(client, 'customers', {
-        name, code: `DEMO-CUS-${String(i).padStart(2,'0')}`, email: `customer${i}@demo.local`,
-        country: ['Italy','Germany','Spain','Poland','France'][i % 5], default_currency: i % 4 === 0 ? 'USD' : 'EUR', status: 'active',
+        name, customer_code: `DEMO-CUS-${String(i).padStart(2,'0')}`, email: `customer${i}@demo.local`,
+        country: ['Italy','Germany','Spain','Poland','France'][i % 5], default_currency: i % 4 === 0 ? 'USD' : 'EUR', status: 'ACTIVE',
       });
       customerIds.push(c.id);
     }
 
     const productIds = [];
+    const productNames = [];
     for (let i = 1; i <= 20; i++) {
       const name = `Demo Hydraulic Part ${String(i).padStart(2,'0')}`;
+      productNames.push(name);
       const existing = (await client.query(`SELECT id FROM products WHERE name=$1 LIMIT 1`, [name])).rows[0];
       const purchase = 12 + i * 3.75;
       const sale = money(purchase * (1.22 + (i % 4) * 0.04));
@@ -80,7 +74,6 @@ async function main() {
       productIds.push(p.id);
     }
 
-    // 20 inquiries covering the full sales funnel.
     const inquiryStatuses = ['NEW','PRICING','OFFER_SENT','WON','LOST','CONVERTED'];
     const inquiryIds = [];
     for (let i = 1; i <= 20; i++) {
@@ -101,27 +94,25 @@ async function main() {
       await insert(client, 'inquiry_status_history', { inquiry_id: q.id, from_status: null, to_status: status, changed_by: admin, created_at: daysAgo(20 - i) });
     }
 
-    // 20 fully usable invoice/order scenarios. Extra lifecycle orders are added below for status testing.
-    const orderIds = [];
     const orderStatuses = ['customer_confirmed','in_production','shipped','completed'];
     for (let i = 1; i <= 20; i++) {
       const number = `ORD-DEMO-${String(i).padStart(4,'0')}`;
       const existing = (await client.query(`SELECT id FROM orders WHERE order_number=$1 LIMIT 1`, [number])).rows[0];
-      if (existing) { orderIds.push(existing.id); continue; }
+      if (existing) continue;
       const customerId = customerIds[(i - 1) % customerIds.length];
-      const productId = productIds[(i - 1) % productIds.length];
+      const productIndex = (i - 1) % productIds.length;
+      const productId = productIds[productIndex];
       const qty = 50 + i * 10;
-      const purchase = 12 + ((i - 1) % 20 + 1) * 3.75;
+      const purchase = 12 + (productIndex + 1) * 3.75;
       const sale = money(purchase * (1.22 + (i % 4) * 0.04));
       const total = money(qty * sale);
       const status = orderStatuses[(i - 1) % orderStatuses.length];
+
       const o = await insert(client, 'orders', {
         order_number: number, customer_id: customerId, customer_order_number: `CUST-DEMO-${String(i).padStart(4,'0')}`,
         customer_order_date: daysAgo(30 - i), requested_delivery_date: daysFromNow(i - 10), status,
         currency: 'EUR', total_amount: total, created_by: admin, notes: `Demo order scenario ${i}`,
-        inquiry_id: inquiryIds[(i - 1) % inquiryIds.length],
       });
-      orderIds.push(o.id);
       const oi = await insert(client, 'order_items', {
         order_id: o.id, product_id: productId, quantity: qty, unit_purchase_price: purchase, unit_sale_price: sale,
         margin_percent: ((sale - purchase) / sale) * 100, currency: 'EUR', total_sale_price: total,
@@ -129,7 +120,6 @@ async function main() {
       });
       await insert(client, 'order_status_history', { order_id: o.id, from_status: null, to_status: status, changed_by: admin, created_at: daysAgo(25 - Math.min(i, 20)) });
 
-      // Create a shipment for shipped/completed orders; partial shipment for in-production orders.
       if (['in_production','shipped','completed'].includes(status)) {
         const shippedQty = status === 'in_production' ? Math.floor(qty * 0.55) : (i % 5 === 0 ? qty + 5 : qty);
         const sh = await insert(client, 'shipments', {
@@ -139,19 +129,18 @@ async function main() {
         });
         await insert(client, 'shipment_items', { shipment_id: sh.id, order_item_id: oi.id, quantity: shippedQty });
         await insert(client, 'packing_lists', { shipment_id: sh.id, gross_weight: 80 + i * 2, net_weight: 70 + i * 2, pallet_count: 1 + (i % 4), package_count: 2 + (i % 6), notes: `Demo packing list ${i}` });
-        await insert(client, 'loading_instructions', { shipment_id: sh.id, instruction_text: `Demo loading instruction ${i}. Customer: Demo Customer ${String(((i-1)%10)+1).padStart(2,'0')}.` });
+        await insert(client, 'loading_instructions', { shipment_id: sh.id, instruction_text: `Demo loading instruction ${i}. Customer: Demo Customer ${String(((i - 1) % 10) + 1).padStart(2,'0')}.` });
       }
 
-      // Every demo order gets a customer invoice; payment states vary deliberately.
       const invStatus = i % 5 === 0 ? 'PAID' : (i % 3 === 0 ? 'PARTIAL' : 'ISSUED');
       const inv = await insert(client, 'invoices', {
-        invoice_number: `${i % 2 ? 'FZE' : 'FZD}-DEMO-${String(i).padStart(5,'0')}`,
+        invoice_number: `${i % 2 ? 'FZE' : 'FZD'}-DEMO-${String(i).padStart(5,'0')}`,
         external_invoice_number: `EXT-DEMO-${String(i).padStart(5,'0')}`, order_id: o.id, customer_id: customerId,
         status: invStatus, total_amount: total, currency: 'EUR', exchange_rate_snapshot: i % 4 === 0 ? 37.25 : null,
         due_date: daysFromNow(i % 3 === 0 ? -5 : 15),
       });
       await insert(client, 'invoice_items', {
-        invoice_id: inv.id, order_item_id: oi.id, description: nameSafe(productId, i), quantity: qty,
+        invoice_id: inv.id, order_item_id: oi.id, description: productNames[productIndex], quantity: qty,
         unit_price: sale, total_price: total, currency: 'EUR', options_snapshot: JSON.stringify({ demo: true, scenario: i }),
       });
 
@@ -164,27 +153,25 @@ async function main() {
         });
       }
 
-      // Supplier-side invoice and payment data for all 20 scenarios.
       const siStatus = i % 4 === 0 ? 'PAID' : (i % 3 === 0 ? 'PARTIAL' : 'UNPAID');
       const supplierId = supplierIds[(i - 1) % supplierIds.length];
       const supplierAmount = money(purchase * qty);
       const si = await insert(client, 'supplier_invoices', {
         supplier_id: supplierId, order_id: o.id, invoice_number: `SUP-DEMO-${String(i).padStart(5,'0')}`,
         invoice_date: daysAgo(12 - (i % 5)), due_date: daysFromNow(i % 4 === 0 ? -2 : 12),
-        amount: supplierAmount, total_amount: supplierAmount, currency: i % 4 === 0 ? 'TRY' : 'EUR',
-        exchange_rate_to_eur: i % 4 === 0 ? 37.25 : 1, status: siStatus,
+        amount: supplierAmount, currency: i % 4 === 0 ? 'TRY' : 'EUR',
+        exchange_rate_snapshot: i % 4 === 0 ? 37.25 : 1, status: siStatus,
       });
       if (siStatus === 'PAID' || siStatus === 'PARTIAL') {
         const paid = siStatus === 'PAID' ? supplierAmount : money(supplierAmount * 0.5);
         await insert(client, 'supplier_payments', {
           supplier_invoice_id: si.id, amount: paid, payment_date: daysAgo(i % 6), payment_method: ['BANK','CASH','CHECK'][i % 3],
-          currency: si.currency, exchange_rate_to_eur: si.exchange_rate_to_eur || 1, reference_number: `SUP-PAY-DEMO-${String(i).padStart(5,'0')}`,
+          currency: si.currency, exchange_rate_to_eur: si.exchange_rate_snapshot || 1, reference_number: `SUP-PAY-DEMO-${String(i).padStart(5,'0')}`,
           status: 'RECORDED', notes: `Demo supplier payment ${i}`,
         });
       }
     }
 
-    // Eight additional orders exercise early lifecycle states without invoices.
     const lifecycle = ['draft','supplier_ordered','proforma_sent','customer_confirmed','in_production','supplier_ordered','proforma_sent','draft'];
     for (let i = 1; i <= lifecycle.length; i++) {
       const number = `ORD-LIFE-DEMO-${String(i).padStart(3,'0')}`;
@@ -212,7 +199,7 @@ async function main() {
     }
 
     await client.query('COMMIT');
-    console.log('Demo seed completed: 20 inquiries, 20 invoice/order scenarios, supplier invoices/payments, shipments, packing/loading data, plus 8 lifecycle orders.');
+    console.log('Demo seed completed successfully.');
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('Demo seed failed:', e.message);
@@ -222,7 +209,5 @@ async function main() {
     await pool.end();
   }
 }
-
-function nameSafe(productId, i) { return `Demo Hydraulic Part ${String(((productId - 1) % 20) + 1).padStart(2,'0')} / Scenario ${i}`; }
 
 main();
