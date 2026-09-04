@@ -1,4 +1,23 @@
-import {NextRequest} from 'next/server';import {pool} from '@/lib/db';import {getSession,handleApiError,requirePermission} from '@/lib/api/guards';
-const cfg:any={customers:{table:'customers',permission:'customers:read',create:['name','email','phone','city','country','credit_limit']},suppliers:{table:'suppliers',permission:'suppliers:read',create:['name','email','phone','city','country']},products:{table:'products',permission:'products:read',create:['name','sku','description','unit_price','category','drawing_file_url']},orders:{table:'orders',permission:'orders:read',create:['customer_id','status','total_amount','currency','created_by']},invoices:{table:'invoices',permission:'invoices:read',create:['invoice_number','order_id','customer_id','status','total_amount','currency','due_date']},payments:{table:'payments',permission:'payments:read',create:['invoice_id','amount','payment_date','payment_method','reference_number','status']},shipments:{table:'shipments',permission:'shipments:read',create:['shipment_number','order_id','status','shipment_date','expected_delivery']},offers:{table:'price_offers',permission:'offers:read',create:['offer_number','customer_id','status','total_amount','currency','valid_until','created_by']},claims:{table:'claims',permission:'claims:read',create:['invoice_id','order_id','description','amount','status','created_by']}};
-export async function GET(req:NextRequest,{params}:{params:{resource:string}}){try{const u=await getSession(req),c=cfg[params.resource];if(!c) return Response.json({success:false,error:'Unknown resource'},{status:404});requirePermission(u,c.permission);const sp=req.nextUrl.searchParams;const limit=Math.min(Math.max(Number(sp.get('limit')||20),1),100);const offset=Math.max(Number(sp.get('offset')||0),0);const r=await pool.query(`SELECT * FROM ${c.table} WHERE deleted_at IS NULL ORDER BY id DESC LIMIT $1 OFFSET $2`,[limit,offset]);return Response.json({success:true,data:r.rows,pagination:{limit,offset}})}catch(e){return handleApiError(e)}}
-export async function POST(req:NextRequest,{params}:{params:{resource:string}}){try{const u=await getSession(req),c=cfg[params.resource];if(!c)return Response.json({success:false,error:'Unknown resource'},{status:404});requirePermission(u,c.permission.replace(':read',':create'));const body=await req.json();const cols=c.create.filter((x:string)=>body[x]!==undefined);if(!cols.length)return Response.json({success:false,error:'No valid fields supplied'},{status:400});const vals=cols.map((x:string)=>body[x]);const r=await pool.query(`INSERT INTO ${c.table} (${cols.join(',')}) VALUES (${cols.map((_:string,i:number)=>'$'+(i+1)).join(',')}) RETURNING *`,vals);return Response.json({success:true,data:r.rows[0]},{status:201})}catch(e){return handleApiError(e)}}
+import {NextRequest} from 'next/server';
+import {pool} from '@/lib/db';
+import {getSession,handleApiError,requirePermission} from '@/lib/api/guards';
+
+export const dynamic = 'force-dynamic';
+
+const cfg:any={
+  customers:{table:'customers',permission:'customers:read',create:['name','email','phone','city','country','credit_limit']},
+  suppliers:{table:'suppliers',permission:'suppliers:read',create:['name','email','phone','city','country']},
+  products:{table:'products',permission:'products:read',create:['name','sku','description','unit_price','category','drawing_file_url']},
+  orders:{table:'orders',permission:'orders:read'},
+  invoices:{table:'invoices',permission:'invoices:read'},
+  payments:{table:'payments',permission:'payments:read'},
+  shipments:{table:'shipments',permission:'shipments:read'},
+  offers:{table:'price_offers',permission:'offers:read'},
+  claims:{table:'claims',permission:'claims:read',create:['invoice_id','order_id','description','amount','status','created_by']}
+};
+
+const readOnly = new Set(['orders','invoices','payments','shipments','offers']);
+
+export async function GET(req:NextRequest,{params}:{params:{resource:string}}){try{const u=await getSession(req),c=cfg[params.resource];if(!c)return Response.json({success:false,error:'Unknown resource'},{status:404});requirePermission(u,c.permission);const sp=req.nextUrl.searchParams;const limit=Math.min(Math.max(Number(sp.get('limit')||20),1),100);const offset=Math.max(Number(sp.get('offset')||0),0);const r=await pool.query(`SELECT * FROM ${c.table} WHERE deleted_at IS NULL ORDER BY id DESC LIMIT $1 OFFSET $2`,[limit,offset]);return Response.json({success:true,data:r.rows,pagination:{limit,offset}})}catch(e){return handleApiError(e)}}
+
+export async function POST(req:NextRequest,{params}:{params:{resource:string}}){try{if(readOnly.has(params.resource))return Response.json({success:false,error:'Use the dedicated API for this transactional resource'},{status:405});const u=await getSession(req),c=cfg[params.resource];if(!c||!c.create)return Response.json({success:false,error:'Unknown or non-creatable resource'},{status:404});requirePermission(u,c.permission.replace(':read',':create'));const body=await req.json();const cols=c.create.filter((x:string)=>body[x]!==undefined);if(!cols.length)return Response.json({success:false,error:'No valid fields supplied'},{status:400});const vals=cols.map((x:string)=>body[x]);const r=await pool.query(`INSERT INTO ${c.table} (${cols.join(',')}) VALUES (${cols.map((_:string,i:number)=>'$'+(i+1)).join(',')}) RETURNING *`,vals);return Response.json({success:true,data:r.rows[0]},{status:201})}catch(e){return handleApiError(e)}}
