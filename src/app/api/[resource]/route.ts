@@ -30,23 +30,18 @@ const cfg: Record<string, ResourceConfig> = {
   },
 };
 
-const readOnly = new Set(['orders', 'invoices', 'payments', 'shipments', 'offers']);
+const readOnlyTables: Record<string, string> = {
+  orders: 'orders', invoices: 'invoices', payments: 'payments', shipments: 'shipments', offers: 'price_offers',
+};
+const readOnly = new Set(Object.keys(readOnlyTables));
 
 export async function GET(req: NextRequest, { params }: { params: { resource: string } }) {
   try {
     const user = await getSession(req);
     const resource = cfg[params.resource];
-    if (readOnly.has(params.resource)) {
-      const permission = `${params.resource === 'offers' ? 'offers' : params.resource}:read`;
-      requirePermission(user, permission);
-    } else if (!resource) {
-      return Response.json({ success: false, error: 'Unknown resource' }, { status: 404 });
-    } else {
-      requirePermission(user, resource.permission);
-    }
-
-    const table = resource?.table ?? ({ orders: 'orders', invoices: 'invoices', payments: 'payments', shipments: 'shipments', offers: 'price_offers' } as Record<string, string>)[params.resource];
+    const table = resource?.table ?? readOnlyTables[params.resource];
     if (!table) return Response.json({ success: false, error: 'Unknown resource' }, { status: 404 });
+    requirePermission(user, `${params.resource === 'offers' ? 'offers' : params.resource}:read`);
 
     const sp = req.nextUrl.searchParams;
     const limit = Math.min(Math.max(Number(sp.get('limit') || 20), 1), 100);
@@ -62,11 +57,12 @@ export async function GET(req: NextRequest, { params }: { params: { resource: st
 }
 
 export async function POST(req: NextRequest, { params }: { params: { resource: string } }) {
-  try {
-    if (readOnly.has(params.resource)) {
-      return Response.json({ success: false, error: 'Use the dedicated API for this transactional resource' }, { status: 405 });
-    }
+  if (readOnly.has(params.resource)) {
+    return Response.json({ success: false, error: 'Use the dedicated API for this transactional resource' }, { status: 405 });
+  }
 
+  const client = await pool.connect();
+  try {
     const user = await getSession(req);
     const resource = cfg[params.resource];
     if (!resource) return Response.json({ success: false, error: 'Unknown or non-creatable resource' }, { status: 404 });
@@ -77,14 +73,18 @@ export async function POST(req: NextRequest, { params }: { params: { resource: s
     if (!cols.length) return Response.json({ success: false, error: 'No valid fields supplied' }, { status: 400 });
 
     const values = cols.map((column) => body[column]);
-    const result = await pool.query(
+    await client.query('BEGIN');
+    const result = await client.query(
       `INSERT INTO ${resource.table} (${cols.join(',')}) VALUES (${cols.map((_, index) => `$${index + 1}`).join(',')}) RETURNING *`,
       values,
     );
-
-    await audit(pool, user.id, 'create', resource.table, result.rows[0].id, { fields: cols });
+    await audit(client, user.id, 'create', resource.table, result.rows[0].id, { fields: cols });
+    await client.query('COMMIT');
     return Response.json({ success: true, data: result.rows[0] }, { status: 201 });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     return handleApiError(error);
+  } finally {
+    client.release();
   }
 }
