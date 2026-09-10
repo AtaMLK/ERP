@@ -3,6 +3,7 @@ import { pool } from '@/lib/db';
 import { getSession, handleApiError, requirePermission } from '@/lib/api/guards';
 import { renderInvoiceDocument, renderShipmentDocument } from '@/lib/server/documents';
 import { sendDocumentEmail } from '@/lib/server/email';
+import { audit } from '@/lib/server/audit';
 
 export async function POST(req: NextRequest) {
   const client = await pool.connect();
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
     }
     if (!recipient || !recipient.includes('@')) throw new Error('A valid recipient email is required');
     await sendDocumentEmail(client, { userId: user.id, recipient, subject, html, template: `${type}_document` });
+    await audit(client, user.id, 'send', `${type}_document`, id, { recipient, subject });
     return Response.json({ success: true, data: { type, id, recipient, subject } });
   } catch (e) { return handleApiError(e); } finally { client.release(); }
 }
