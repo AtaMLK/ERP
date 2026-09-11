@@ -11,6 +11,7 @@
     "create-admin": "node scripts/create-admin.js",
     "db:setup": "node scripts/setup-db.js",
     "db:seed-demo": "node scripts/seed-demo.js && node scripts/complete-demo-data.js",
+    "production:functional": "node scripts/production-functional.js",
     "production:check": "node scripts/production-checklist.js"
   },
   "dependencies": {
