@@ -4,6 +4,8 @@ import { audit } from '@/lib/server/audit';
 import { nextNumber } from '@/lib/server/numbering';
 import { getSession, handleApiError, requirePermission } from '@/lib/api/guards';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const user = await getSession(req); requirePermission(user, 'shipments:read');
@@ -38,7 +40,11 @@ export async function POST(req: NextRequest) {
     const fulfillment=await client.query(`SELECT oi.id,oi.quantity,COALESCE((SELECT SUM(si.quantity) FROM shipment_items si JOIN shipments sx ON sx.id=si.shipment_id WHERE si.order_item_id=oi.id AND sx.deleted_at IS NULL),0) shipped_quantity FROM order_items oi WHERE oi.order_id=$1`,[body.orderId]);
     const fullyFulfilled=fulfillment.rows.length>0&&fulfillment.rows.every((x:any)=>Number(x.shipped_quantity)>=Number(x.quantity));
     const previousStatus=order.rows[0].status,nextStatus=fullyFulfilled?'shipped':'in_production';
-    if(previousStatus!==nextStatus){await client.query('UPDATE orders SET status=$1,updated_at=now() WHERE id=$2',[nextStatus,body.orderId]);await client.query('INSERT INTO order_status_history(order_id,from_status,to_status,changed_by) VALUES($1,$2,$3,$4)',[body.orderId,previousStatus,nextStatus,user.id]);}
+    if(previousStatus!==nextStatus){
+      requirePermission(user,'shipments:approve');
+      await client.query('UPDATE orders SET status=$1,updated_at=now() WHERE id=$2',[nextStatus,body.orderId]);
+      await client.query('INSERT INTO order_status_history(order_id,from_status,to_status,changed_by) VALUES($1,$2,$3,$4)',[body.orderId,previousStatus,nextStatus,user.id]);
+    }
     await audit(client,user.id,'create','shipments',shipment.rows[0].id,{shipment_number:shipmentNumber,order_id:body.orderId,items,fully_fulfilled:fullyFulfilled});
     await client.query('COMMIT');
     return Response.json({success:true,data:{...shipment.rows[0],fullyFulfilled,items}},{status:201});
