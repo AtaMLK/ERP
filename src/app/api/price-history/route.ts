@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { pool } from '@/lib/db';
 import { getSession, handleApiError, requirePermission } from '@/lib/api/guards';
 
+export const dynamic='force-dynamic';
+
 export async function GET(req: NextRequest){
   try{
     const user=await getSession(req); requirePermission(user,'products:read');
