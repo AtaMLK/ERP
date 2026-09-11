@@ -14,27 +14,23 @@ async function main() {
   try {
     await client.query('BEGIN');
 
-    // Development-only credentials. Never use these passwords in production.
-    const users = [
-      ['admin@demo.local', 'Demo Admin', 'DemoAdmin2026!Secure', 'Admin'],
-      ['sales@demo.local', 'Demo Sales', 'DemoSales2026!Secure', 'Sales'],
-      ['accounting@demo.local', 'Demo Accounting', 'DemoAccounting2026!Secure', 'Accountant'],
-      ['warehouse@demo.local', 'Demo Warehouse', 'DemoWarehouse2026!Secure', 'Warehouse'],
-    ];
+    // The ERP has a hard maximum of 5 active users. Demo data should not
+    // consume additional user slots when an admin user already exists.
+    const activeAdmin = await client.query(`
+      SELECT u.id
+      FROM users u
+      JOIN user_roles ur ON ur.user_id=u.id
+      JOIN roles r ON r.id=ur.role_id
+      WHERE u.deleted_at IS NULL AND r.name='Admin'
+      ORDER BY u.id
+      LIMIT 1
+    `);
+    if (!activeAdmin.rowCount) throw new Error('No active Admin user exists. Run create-admin first.');
+    const admin = activeAdmin.rows[0].id;
 
-    for (const [email, name, password, roleName] of users) {
-      const hash = await bcrypt.hash(password, 12);
-      const u = await client.query(`
-        INSERT INTO users(email,name,password_hash)
-        VALUES($1,$2,$3)
-        ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name,password_hash=EXCLUDED.password_hash,updated_at=now(),deleted_at=NULL
-        RETURNING id
-      `, [email, name, hash]);
-      const role = await client.query(`SELECT id FROM roles WHERE name=$1`, [roleName]);
-      await client.query(`INSERT INTO user_roles(user_id,role_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [u.rows[0].id, role.rows[0].id]);
-    }
-
-    const admin = (await client.query(`SELECT id FROM users WHERE email='admin@demo.local'`)).rows[0].id;
+    // Keep existing demo users if they already exist, but do not create new
+    // users here. This keeps the demo seed compatible with the production
+    // five-active-user limit.
 
     // Customer contacts.
     const customers = await client.query(`SELECT id,name FROM customers WHERE name LIKE 'Demo Customer %' ORDER BY id`);
@@ -70,16 +66,18 @@ async function main() {
     // Price offers linked to customers/products.
     const customerRows = await client.query(`SELECT id FROM customers WHERE name LIKE 'Demo Customer %' ORDER BY id LIMIT 10`);
     const productRows = products.rows;
-    for (let i=1;i<=10;i++) {
-      const number=`OFF-DEMO-${String(i).padStart(4,'0')}`;
-      const existing=await client.query(`SELECT id FROM price_offers WHERE offer_number=$1`,[number]);
-      if(existing.rowCount) continue;
-      const p=productRows[(i-1)%productRows.length];
-      const prod=(await client.query(`SELECT purchase_price,sale_price,currency FROM products WHERE id=$1`,[p.id])).rows[0];
-      const qty=25+i*5;
-      const total=Number((qty*Number(prod.sale_price)).toFixed(2));
-      const offer=await client.query(`INSERT INTO price_offers(offer_number,customer_id,status,total_amount,currency,valid_until,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '14 days',$6) RETURNING id`,[number,customerRows.rows[(i-1)%customerRows.rowCount].id,i%4===0?'ACCEPTED':(i%3===0?'SENT':'DRAFT'),total,prod.currency,admin]);
-      await client.query(`INSERT INTO price_offer_items(price_offer_id,product_id,quantity,unit_purchase_price,unit_price,margin_percent,total_price,options_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[offer.rows[0].id,p.id,qty,prod.purchase_price,prod.sale_price,((prod.sale_price-prod.purchase_price)/prod.sale_price)*100,total,JSON.stringify({Material:'Steel',Seal:'NBR'})]);
+    if (customerRows.rowCount && productRows.length) {
+      for (let i=1;i<=10;i++) {
+        const number=`OFF-DEMO-${String(i).padStart(4,'0')}`;
+        const existing=await client.query(`SELECT id FROM price_offers WHERE offer_number=$1`,[number]);
+        if(existing.rowCount) continue;
+        const p=productRows[(i-1)%productRows.length];
+        const prod=(await client.query(`SELECT purchase_price,sale_price,currency FROM products WHERE id=$1`,[p.id])).rows[0];
+        const qty=25+i*5;
+        const total=Number((qty*Number(prod.sale_price)).toFixed(2));
+        const offer=await client.query(`INSERT INTO price_offers(offer_number,customer_id,status,total_amount,currency,valid_until,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '14 days',$6) RETURNING id`,[number,customerRows.rows[(i-1)%customerRows.rowCount].id,i%4===0?'ACCEPTED':(i%3===0?'SENT':'DRAFT'),total,prod.currency,admin]);
+        await client.query(`INSERT INTO price_offer_items(price_offer_id,product_id,quantity,unit_purchase_price,unit_price,margin_percent,total_price,options_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[offer.rows[0].id,p.id,qty,prod.purchase_price,prod.sale_price,((prod.sale_price-prod.purchase_price)/prod.sale_price)*100,total,JSON.stringify({Material:'Steel',Seal:'NBR'})]);
+      }
     }
 
     // Order costs for every demo order.
@@ -110,7 +108,7 @@ async function main() {
 
     await client.query('COMMIT');
     console.log('Complete demo database seed finished.');
-    console.log('Development login: admin@demo.local / DemoAdmin2026!Secure');
+    console.log('Uses the existing active Admin user; no demo users were created.');
   } catch(e) {
     await client.query('ROLLBACK').catch(()=>{});
     console.error('Complete demo seed failed:',e.message);
