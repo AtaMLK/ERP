@@ -1,0 +1,2 @@
+import {NextRequest} from 'next/server';import {pool} from '@/lib/db';import {getSession,handleApiError,requirePermission} from '@/lib/api/guards';
+export async function GET(req:NextRequest){try{const u=await getSession(req);requirePermission(u,'email_logs:read');const r=await pool.query(`SELECT id,recipient,subject,template,status,error_message,sent_at,created_at FROM email_logs ORDER BY created_at DESC,id DESC LIMIT 300`);return Response.json({success:true,data:r.rows})}catch(e){return handleApiError(e)}}
