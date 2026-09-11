@@ -2,13 +2,20 @@
 BEGIN;
 
 -- RBAC/reporting objects must reference the existing INT identity columns.
+-- Scope these checks to public tables: Supabase also has auth.users(id UUID).
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='id' AND data_type <> 'integer') THEN
-    RAISE EXCEPTION 'users.id must remain integer; migration 009 will not rewrite existing production IDs';
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='users' AND column_name='id' AND data_type <> 'integer'
+  ) THEN
+    RAISE EXCEPTION 'public.users.id must remain integer; migration 009 will not rewrite existing production IDs';
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='roles' AND column_name='id' AND data_type <> 'integer') THEN
-    RAISE EXCEPTION 'roles.id must remain integer; migration 009 will not rewrite existing production IDs';
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='roles' AND column_name='id' AND data_type <> 'integer'
+  ) THEN
+    RAISE EXCEPTION 'public.roles.id must remain integer; migration 009 will not rewrite existing production IDs';
   END IF;
 END $$;
 
