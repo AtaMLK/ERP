@@ -53,22 +53,42 @@ async function main() {
   const email = emailArg ? emailArg.slice(8) : await ask('Admin email: ');
   const name = nameArg ? nameArg.slice(7) : await ask('Admin name: ');
   const password = await askSecret('Admin password: ');
-  if (!email || !name || password.length < 12) throw new Error('Email, name and a password of at least 12 characters are required');
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedName = name.trim();
+  if (!normalizedEmail || !normalizedName || password.length < 12) throw new Error('Email, name and a password of at least 12 characters are required');
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const hash = await bcrypt.hash(password, 12);
-    const user = await client.query(`
-      INSERT INTO users(email,name,password_hash)
-      VALUES($1,$2,$3)
-      ON CONFLICT(email) DO UPDATE SET
-        name=EXCLUDED.name,
-        password_hash=EXCLUDED.password_hash,
-        updated_at=now(),
-        deleted_at=NULL
-      RETURNING id,email,name
-    `, [email.trim().toLowerCase(), name.trim(), hash]);
+
+    // Look up first and UPDATE an existing account directly. This avoids the
+    // PostgreSQL BEFORE INSERT max-user trigger firing during an UPSERT before
+    // the unique-email conflict can be resolved. Updating an already-active
+    // user must not consume another one of the five active-user slots.
+    const existing = await client.query(
+      'SELECT id,email FROM users WHERE lower(email)=lower($1) LIMIT 1',
+      [normalizedEmail]
+    );
+
+    let user;
+    if (existing.rows[0]) {
+      user = await client.query(
+        `UPDATE users
+         SET name=$1,password_hash=$2,updated_at=now(),deleted_at=NULL
+         WHERE id=$3
+         RETURNING id,email,name`,
+        [normalizedName, hash, existing.rows[0].id]
+      );
+    } else {
+      user = await client.query(
+        `INSERT INTO users(email,name,password_hash)
+         VALUES($1,$2,$3)
+         RETURNING id,email,name`,
+        [normalizedEmail, normalizedName, hash]
+      );
+    }
+
     const role = await client.query(`SELECT id FROM roles WHERE name='Admin' LIMIT 1`);
     if (!role.rows[0]) throw new Error('Admin role not found. Run database/schema.sql first.');
     await client.query('INSERT INTO user_roles(user_id,role_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [user.rows[0].id, role.rows[0].id]);
