@@ -1,0 +1,3 @@
+INSERT INTO permissions(resource,action) VALUES ('audit_logs','read'),('email_logs','read'),('email_templates','read'),('email_templates','update') ON CONFLICT(resource,action) DO NOTHING;
+INSERT INTO role_permissions(role_id,resource,action) SELECT r.id,p.resource,p.action FROM roles r CROSS JOIN permissions p WHERE r.name='Admin' AND p.resource IN('audit_logs','email_logs','email_templates') ON CONFLICT DO NOTHING;
+INSERT INTO role_permissions(role_id,resource,action) SELECT r.id,p.resource,p.action FROM roles r CROSS JOIN permissions p WHERE r.name IN('Sales','Accountant','Export') AND p.resource IN('email_logs') AND p.action='read' ON CONFLICT DO NOTHING;
