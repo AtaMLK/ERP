@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 declare module 'nodemailer' {
   type TransportOptions = Record<string, unknown>;
   interface Transporter {
