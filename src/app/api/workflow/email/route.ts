@@ -1,0 +1,5 @@
+import {NextRequest} from 'next/server';
+import {pool} from '@/lib/db';
+import {getSession,handleApiError,requirePermission} from '@/lib/api/guards';
+import {composeEmail,outlookComposeUrl} from '@/lib/server/email-workflow';
+export async function POST(req:NextRequest){try{const u=await getSession(req);requirePermission(u,'offers:read');const b=await req.json();if(!String(b.recipient||'').trim())throw new Error('recipient is required');const email=composeEmail(b.language||'en',b.type||'quotation',b.customMessage||'');const subject=b.subject||email.subject;const body=b.body||email.body;const r=await pool.query(`INSERT INTO communication_history(inquiry_id,quotation_id,order_id,supplier_rfq_id,recipient,language,template,subject,body,status,provider,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'DRAFT','outlook',$10) RETURNING *`,[b.inquiryId||null,b.quotationId||null,b.orderId||null,b.supplierRfqId||null,b.recipient,String(b.language||'en'),b.type||'quotation',subject,body,u.id]);return Response.json({success:true,data:{...r.rows[0],outlookUrl:outlookComposeUrl(b.recipient,subject,body)}})}catch(e){return handleApiError(e)}}
