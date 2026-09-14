@@ -13,7 +13,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --include=dev
+      - run: npm install --no-save --include=dev tailwindcss@3.4.19
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
