@@ -1,37 +1,13 @@
-export type ParsedInquiryLine = { reference:string; description:string; quantity:number; rawLine:string };
-
+export type ParsedInquiryLine={reference:string;description:string;quantity:number;rawLine:string};
 const NOISE=/^(hi|hello|dear|good morning|good afternoon|good evening|thanks|thank you|best regards|kind regards|regards|please|we need|could you|can you|please find|quotation|quote|rfq|subject|from|to|cc|bcc|sent|date)\b/i;
-const QTY=/(?:qty|quantity|pcs|pieces|pc|units|unit|x)\s*[:=]?\s*(\d+(?:[.,]\d+)?)/i;
+const QTY=/(?:qty|quantity|pcs|pieces|pc|units|unit)\s*[:=]?\s*(\d+(?:[.,]\d+)?)/i;
+const X_QTY=/(?:^|[\s,:;|])x\s*(\d+(?:[.,]\d+)?)\s*(?:pcs?|pieces?|units?)?\b/i;
 const LEADING_QTY=/^\s*(\d+(?:[.,]\d+)?)\s*(?:pcs?|pieces?|units?)?\s+(.+)$/i;
 const TRAILING_QTY=/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*(?:pcs?|pieces?|pc|units?|qty|quantity)?\s*$/i;
 const EMAIL_HEADER=/^(from|to|cc|bcc|subject|sent|date)\s*:/i;
-const PRODUCT_WORDS=/\b(gdc|gland|piston|rod|seal|plug|head|trunnion|coupling|bell|bushing|bearing|cylinder|kit|end|guide|sleeve|cap|flange|valve|oring|o-ring|oring)\b/i;
+const PRODUCT_WORDS=/\b(gdc|gland|piston|rod|seal|plug|head|trunnion|coupling|bell|bushing|bearing|cylinder|kit|end|guide|sleeve|cap|flange|valve|oring|o-ring)\b/i;
 const PRODUCT_CODE=/\b[A-Z]{2,}[A-Z0-9._/-]*\d[A-Z0-9._/-]*(?:\s*[xX]\s*\d{1,5})?\b/i;
-
 function clean(s:string){return s.replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim()}
-function qtyFrom(line:string){const a=line.match(QTY);if(a)return Number(a[1].replace(',','.'));const b=line.match(LEADING_QTY);if(b)return Number(b[1].replace(',','.'));const c=line.match(TRAILING_QTY);if(c)return Number(c[2].replace(',','.'));return null}
-function refFrom(line:string){
- const leading=line.match(LEADING_QTY);if(leading)return clean(leading[2]);
- const trailing=line.match(TRAILING_QTY);if(trailing)return clean(trailing[1]).replace(/^(?:item|product|part(?:\s*no)?|sku)\s*[:#-]?\s*/i,'');
- const withoutQty=line.replace(QTY,' ').trim();
- const parts=withoutQty.split(/\t|\||;|\s{2,}/).map(clean).filter(Boolean);
- if(parts.length>1)return parts[0];
- const code=withoutQty.match(PRODUCT_CODE);if(code)return code[0];
- return withoutQty.replace(/^(?:item|product|part(?:\s*no)?|sku)\s*[:#-]?\s*/i,'').trim();
-}
-
-export function parseInquiryEmail(raw:string):ParsedInquiryLine[]{
- const lines=String(raw||'').replace(/\r/g,'').split('\n').map(clean).filter(Boolean);const out:ParsedInquiryLine[]=[];
- for(const line of lines){
-  if(EMAIL_HEADER.test(line)||NOISE.test(line)||/^[-_=]{3,}$/.test(line))continue;
-  const q=qtyFrom(line);if(!q||!(q>0))continue;
-  const ref=refFrom(line);if(!ref||ref.length<2)continue;
-  const productish=PRODUCT_WORDS.test(ref)||PRODUCT_WORDS.test(line)||PRODUCT_CODE.test(ref)||/\b(?:item|product|part|sku)\b/i.test(line);
-  if(!productish)continue;
-  const tabParts=line.split(/\t|\||;/).map(clean).filter(Boolean);
-  let description=tabParts.length>=3?tabParts.slice(2).join(' '):ref;
-  if(description===ref){description=line.replace(QTY,' ').replace(LEADING_QTY,'$2').replace(TRAILING_QTY,'$1').replace(ref,'').replace(/[-–—:]+/g,' ').trim()||ref}
-  out.push({reference:ref,description,quantity:q,rawLine:line});
- }
- return out;
-}
+function qtyFrom(line:string){const a=line.match(QTY);if(a)return Number(a[1].replace(',','.'));const b=line.match(X_QTY);if(b)return Number(b[1].replace(',','.'));const c=line.match(LEADING_QTY);if(c)return Number(c[1].replace(',','.'));const d=line.match(TRAILING_QTY);if(d)return Number(d[2].replace(',','.'));return null}
+function refFrom(line:string){const leading=line.match(LEADING_QTY);if(leading)return clean(leading[2]);const trailing=line.match(TRAILING_QTY);if(trailing)return clean(trailing[1]).replace(/^(?:item|product|part(?:\s*no)?|sku)\s*[:#-]?\s*/i,'');const withoutQty=line.replace(QTY,' ').replace(X_QTY,' ').trim();const parts=withoutQty.split(/\t|\||;|\s{2,}/).map(clean).filter(Boolean);if(parts.length>1)return parts[0];const code=withoutQty.match(PRODUCT_CODE);if(code)return code[0];return withoutQty.replace(/^(?:item|product|part(?:\s*no)?|sku)\s*[:#-]?\s*/i,'').trim()}
+export function parseInquiryEmail(raw:string):ParsedInquiryLine[]{const lines=String(raw||'').replace(/\r/g,'').split('\n').map(clean).filter(Boolean);const out:ParsedInquiryLine[]=[];for(const line of lines){if(EMAIL_HEADER.test(line)||NOISE.test(line)||/^[-_=]{3,}$/.test(line))continue;const q=qtyFrom(line);if(!q||!(q>0))continue;const ref=refFrom(line);if(!ref||ref.length<2)continue;const productish=PRODUCT_WORDS.test(ref)||PRODUCT_WORDS.test(line)||PRODUCT_CODE.test(ref)||/\b(?:item|product|part|sku)\b/i.test(line);if(!productish)continue;const tabParts=line.split(/\t|\||;/).map(clean).filter(Boolean);let description=tabParts.length>=3?tabParts.slice(2).join(' '):ref;if(description===ref)description=line.replace(QTY,' ').replace(X_QTY,' ').replace(LEADING_QTY,'$2').replace(TRAILING_QTY,'$1').replace(ref,'').replace(/[-–—:]+/g,' ').trim()||ref;out.push({reference:ref,description,quantity:q,rawLine:line})}return out}
